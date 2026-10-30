@@ -17,8 +17,8 @@ target_include_directories(context16_concurrent_index INTERFACE
 add_executable(concurrent_index_test tests/concurrent_index_test.cpp)
 target_link_libraries(concurrent_index_test PRIVATE context16_concurrent_index)
 
-find_package(Threads)
-if(Threads_FOUND)
+find_package(Threads QUIET)
+if(TARGET Threads::Threads)
   target_link_libraries(concurrent_index_test PRIVATE Threads::Threads)
 endif()
 
