@@ -1,4 +1,4 @@
-﻿#pragma once
+#pragma once
 
 // Minimal thread/mutex compatibility layer.
 //

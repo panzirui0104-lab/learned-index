@@ -1,4 +1,4 @@
-﻿// Multi-reader / multi-writer test for concurrent_index.hpp.
+// Multi-reader / multi-writer test for concurrent_index.hpp.
 //
 // Build (MinGW or Linux):
 //   g++ -std=c++17 -O2 -pthread concurrent_index_test.cpp -o concurrent_index_test
