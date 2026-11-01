@@ -4,6 +4,14 @@
 仓库：`panzirui0104-lab/learned-index`  
 基线：`czr112/string-learned-index` 的 `02_Code_and_Experiments/validation_e25_20260918/index.hpp`（SHA-256 `c8a1ae3c...`，未修改）
 
+**当前状态（2026-11-01）**
+
+- v2 代码提交：`04a49de`（工作日志更新是 `main` 上后续的 docs-only 提交）
+- v2 tag：`v2.0.0-olc`
+- v1 tag：`v1.0.0`（`4bc0a64`）
+- v1 在根目录保留；v2 在 `v2-olc/`；两个版本并存
+- 已通过 `git diff 4bc0a64..04a49de -- include tests` 确认 v1 代码零改动
+
 ---
 
 ## 1. 两个版本并存
@@ -14,6 +22,20 @@
 | **v2** | `v2-olc/` | Region/Group 级 OLC（版本字 + lock/obsolete + 原地 value 更新） | 新增，未覆盖 v1 |
 
 v2 只新增 `v2-olc/` 目录，没有修改 v1 的 `include/index.hpp`、`include/concurrent/` 或 `tests/`。
+
+查看两个版本：
+
+```bash
+# v1：根目录
+git checkout v1.0.0
+ls include/concurrent
+
+# v2：v2-olc/
+git checkout v2.0.0-olc
+ls v2-olc/include/olc
+```
+
+GitHub 上也可以直接打开 [v2-olc](https://github.com/panzirui0104-lab/learned-index/tree/main/v2-olc) 和 [WORKLOG](https://github.com/panzirui0104-lab/learned-index/blob/main/WORKLOG.md)。
 
 ---
 
@@ -45,7 +67,7 @@ ConcurrentIndex
 
 **测试**
 
-- `tests/concurrent_index_test.cpp`：PASSED，约 276 ms；重复 5 次 0 失败。
+- `tests/concurrent_index_test.cpp`：PASSED，约 265–276 ms；重复 5 次 0 失败。
 - 随机差分：4 seed × 2500 操作，0 mismatch。
 - 并发值一致性：8 writer + 8 reader，10 次 0 失败。
 
@@ -83,6 +105,21 @@ bit 0      obsolete
 - Region 有 `version_` 变化计数器；任何写 `bump()`，`scan` 检测写重叠。
 - 跨 Region `scan` 另有 `active_writers_` + `generation_`，避免混合两代。
 
+**代码文件**
+
+| 文件 | 作用 |
+|---|---|
+| `v2-olc/include/olc/version.hpp` | 64 位版本字：version / lock / obsolete |
+| `v2-olc/include/olc/model.hpp` | Context16 模型（16×258，Q=2^47，MASS=2^16） |
+| `v2-olc/include/olc/group.hpp` | 不可变排序 Group；value 是 atomic |
+| `v2-olc/include/olc/region.hpp` | Region：prefix / model / Group 槽 / OLC 读写 / scan |
+| `v2-olc/include/olc/index.hpp` | 257 个 Region、全局 size、scan generation |
+| `v2-olc/include/olc/compat.hpp` | POSIX std::mutex/thread；Windows spinlock/CreateThread（测试用） |
+| `v2-olc/tests/olc_index_test.cpp` | 基础/顺序/并发/同 shard 测试 |
+| `v2-olc/tests/olc_random_test.cpp` | 4 seed × 2500 随机差分 |
+| `v2-olc/tests/olc_value_test.cpp` | 并发值一致性（8 writer + 8 reader） |
+| `v2-olc/tests/olc_contention_test.cpp` | 单 Group 争用（4 writer + 4 reader） |
+
 **与 ART-OLC 的对应**
 
 | ART-OLC | v2 |
@@ -104,11 +141,13 @@ bit 0      obsolete
 
 **测试**
 
-- `v2-olc/tests/olc_index_test.cpp`：PASSED，约 15 ms；重复 20 次 0 失败。
+- `v2-olc/tests/olc_index_test.cpp`：PASSED，约 13–17 ms；重复 20 次 0 失败。
 - `v2-olc/tests/olc_random_test.cpp`：4 seed × 2500 操作，0 mismatch。
 - `v2-olc/tests/olc_value_test.cpp`：8 writer + 8 reader，10 次 0 失败，最终 8000 键。
 - `v2-olc/tests/olc_contention_test.cpp`：单 Group 4 writer + 4 reader，20 次 0 失败。
 - `-DNDEBUG` Release：通过。
+
+以上测试均在本机 MinGW 8.1（Windows）用 g++ 直接编译运行；Linux 的 `std::mutex/std::thread` 路径未在本机执行，CMake 文件已提供但本机没有 cmake，未跑 `ctest`。
 
 ---
 
@@ -143,6 +182,8 @@ bit 0      obsolete
 
 ## 6. 下一步
 
+`v2.0.0-olc` 已发布；以下是后续优化，不影响当前 v1/v2 的可用性：
+
 1. 用 epoch-based reclamation 替换 `shared_ptr` 引用计数（补齐 ART-OLC 的回收方式）。
 2. Group 分裂/合并：热点 Group 增长时拆成多个 Group，保持 `O(log)` 写。
 3. 并行 `bulk_load`：257 个 Region 独立构建。
@@ -162,8 +203,32 @@ g++ -std=c++17 -O2 -I include -I include/concurrent `
   tests/concurrent_index_test.cpp -o build/v1_test.exe
 .\build\v1_test.exe
 
-# v2
-g++ -std=c++17 -O2 -I v2-olc/include `
-  v2-olc/tests/olc_index_test.cpp -o build/v2_test.exe
-.\build\v2_test.exe
+# v2（四个测试）
+$inc = "v2-olc/include"
+$tests = "olc_index_test","olc_random_test","olc_value_test","olc_contention_test"
+foreach ($t in $tests) {
+  g++ -std=c++17 -O2 -I $inc "v2-olc/tests/$t.cpp" -o "build/$t.exe"
+  if ($LASTEXITCODE -ne 0) { throw "build failed: $t" }
+  & ".\build\$t.exe"
+  if ($LASTEXITCODE -ne 0) { throw "test failed: $t" }
+}
 ```
+
+Linux 上把 `-pthread` 加上，或使用 `v2-olc/CMakeLists.txt`：
+
+```bash
+cd v2-olc
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build -j
+ctest --test-dir build --output-on-failure
+```
+
+---
+
+## 8. 推送记录
+
+- v1：`4bc0a64`，tag `v1.0.0`
+- v2：`04a49de`，tag `v2.0.0-olc`
+- 远端：`https://github.com/panzirui0104-lab/learned-index`
+- v2 没有覆盖 v1；`include/`、`tests/`、根 `CMakeLists.txt` 的 v1 内容未改。
+- 工作日志本次更新会作为 `main` 上的一个 docs-only 提交；v1/v2 代码不变。
