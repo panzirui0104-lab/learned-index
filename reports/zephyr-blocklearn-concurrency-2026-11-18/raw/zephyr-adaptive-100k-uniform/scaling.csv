@@ -1,0 +1,5 @@
+implementation_id,threads,status,operations,median_throughput_ops_per_second,speedup_vs_1_thread,parallel_efficiency
+zephyr-blocklearn-concurrent,1,passed,200000,6619469.846659981,1.0,1.0
+zephyr-blocklearn-concurrent,2,passed,200000,12403562.303093448,1.8737999553471758,0.9368999776735879
+zephyr-blocklearn-concurrent,4,passed,200000,25244556.642473966,3.813682549700221,0.9534206374250552
+zephyr-blocklearn-concurrent,8,passed,200000,46390796.06606049,7.008234366301726,0.8760292957877157

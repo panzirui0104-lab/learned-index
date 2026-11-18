@@ -1,0 +1,11 @@
+{
+  "schema": "static-point/v2",
+  "distribution": "hotspot",
+  "hotset_fraction": "0.1",
+  "hot_probability": "0.9",
+  "seed": 42,
+  "operations": 200000,
+  "miss_ratio": "0.1",
+  "repeats": 3,
+  "latency_samples": 1000
+}

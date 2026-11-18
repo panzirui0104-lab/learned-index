@@ -1,0 +1,9 @@
+{
+  "contract": "string-index/v1",
+  "id": "zephyr-blocklearn-concurrent",
+  "source_dir": ".",
+  "cmake_target": "zephyr_concurrent_adapter",
+  "factory_header": "zephyr_concurrent_adapter.h",
+  "factory_symbol": "make_zephyr_concurrent",
+  "source_identity": "Zephyr761/Learned-Index-Model@main + read-only concurrency wrapper"
+}

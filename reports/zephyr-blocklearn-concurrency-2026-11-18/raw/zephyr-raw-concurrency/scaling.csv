@@ -1,0 +1,4 @@
+implementation_id,threads,status,operations,median_throughput_ops_per_second,speedup_vs_1_thread,parallel_efficiency
+block-residual-delta-shortdir-first,1,passed,200000,6322611.238441477,1.0,1.0
+block-residual-delta-shortdir-first,2,unsupported,,,,
+block-residual-delta-shortdir-first,4,unsupported,,,,

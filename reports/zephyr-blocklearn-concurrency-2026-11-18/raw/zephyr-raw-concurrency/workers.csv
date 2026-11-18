@@ -1,0 +1,4 @@
+implementation_id,threads,repeat,worker,operations,lookup_ns,checksum
+block-residual-delta-shortdir-first,1,0,0,200000,31632500,2175516895934591288
+block-residual-delta-shortdir-first,1,1,0,200000,31750000,2175516895934591288
+block-residual-delta-shortdir-first,1,2,0,200000,30963900,2175516895934591288
