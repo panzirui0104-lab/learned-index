@@ -1,4 +1,4 @@
-# 工作日志：Context16 并发索引 v1 → v2
+# 工作日志：Context16 并发索引 v1 → v2 → v3
 
 记录日期：2026-11-01  
 仓库：`panzirui0104-lab/learned-index`  
@@ -8,22 +8,24 @@
 
 - v2 代码提交：`04a49de`（工作日志更新是 `main` 上后续的 docs-only 提交）
 - v2 tag：`v2.0.0-olc`
+- v3 代码位置：`v3-ebr/`，tag `v3.0.0-ebr`
 - v1 tag：`v1.0.0`（`4bc0a64`）
-- v1 在根目录保留；v2 在 `v2-olc/`；两个版本并存
+- v1 在根目录保留；v2 在 `v2-olc/`；v3 在 `v3-ebr/`；三个版本并存
 - 已通过 `git diff 4bc0a64..04a49de -- include tests` 确认 v1 代码零改动
 
 ---
 
-## 1. 两个版本并存
+## 1. 三个版本并存
 
 | 版本 | 位置 | 并发模型 | 状态 |
 |---|---|---|---|
 | **v1** | 根目录 `include/`、`tests/` | shard 级不可变快照（RCU/COW） | 已发布在 `main`，保留不动 |
-| **v2** | `v2-olc/` | Region/Group 级 OLC（版本字 + lock/obsolete + 原地 value 更新） | 新增，未覆盖 v1 |
+| **v2** | `v2-olc/` | Region/Group 级 OLC + `shared_ptr` 回收 | 新增，未覆盖 v1 |
+| **v3** | `v3-ebr/` | 同 v2，但 Group 用 EBR 回收 | 新增，未覆盖 v1/v2 |
 
-v2 只新增 `v2-olc/` 目录，没有修改 v1 的 `include/index.hpp`、`include/concurrent/` 或 `tests/`。
+v2/v3 只新增目录，没有修改 v1 的 `include/index.hpp`、`include/concurrent/` 或 `tests/`。
 
-查看两个版本：
+查看三个版本：
 
 ```bash
 # v1：根目录
@@ -33,9 +35,13 @@ ls include/concurrent
 # v2：v2-olc/
 git checkout v2.0.0-olc
 ls v2-olc/include/olc
+
+# v3：v3-ebr/
+git checkout v3.0.0-ebr
+ls v3-ebr/include/olc
 ```
 
-GitHub 上也可以直接打开 [v2-olc](https://github.com/panzirui0104-lab/learned-index/tree/main/v2-olc) 和 [WORKLOG](https://github.com/panzirui0104-lab/learned-index/blob/main/WORKLOG.md)。
+GitHub 上也可以直接打开 [v2-olc](https://github.com/panzirui0104-lab/learned-index/tree/main/v2-olc)、[v3-ebr](https://github.com/panzirui0104-lab/learned-index/tree/main/v3-ebr) 和 [WORKLOG](https://github.com/panzirui0104-lab/learned-index/blob/main/WORKLOG.md)。
 
 ---
 
@@ -182,14 +188,14 @@ bit 0      obsolete
 
 ## 6. 下一步
 
-`v2.0.0-olc` 已发布；以下是后续优化，不影响当前 v1/v2 的可用性：
+`v2.0.0-olc` 和 `v3.0.0-ebr` 已发布；以下是后续优化，不影响当前 v1/v2/v3 的可用性：
 
-1. 用 epoch-based reclamation 替换 `shared_ptr` 引用计数（补齐 ART-OLC 的回收方式）。
+1. **[已在 v3 完成]** 用 epoch-based reclamation 替换 `shared_ptr` 引用计数（全局 epoch + reader guard；per-thread epoch list 仍可继续优化）。
 2. Group 分裂/合并：热点 Group 增长时拆成多个 Group，保持 `O(log)` 写。
 3. 并行 `bulk_load`：257 个 Region 独立构建。
 4. 首 2 字节/自适应分片，缓解首字节热点。
 5. Linux + ThreadSanitizer 长跑；补线性化/历史检查器。
-6. 如果要求严格 ART-OLC，下一步把 v2 的 Group 槽升级为 `Group*` + EBR，并给 Group 内部加 sub-block 版本。
+6. 如果要求严格 ART-OLC，下一步把 v3 的全局 reader 计数 EBR 升级为 per-thread epoch list，并给 Group 内部加 sub-block 版本。
 
 ---
 
@@ -212,12 +218,22 @@ foreach ($t in $tests) {
   & ".\build\$t.exe"
   if ($LASTEXITCODE -ne 0) { throw "test failed: $t" }
 }
+
+# v3（五个测试，含 EBR）
+$inc = "v3-ebr/include"
+$tests = "olc_index_test","olc_random_test","olc_value_test","olc_contention_test","olc_ebr_test"
+foreach ($t in $tests) {
+  g++ -std=c++17 -O2 -I $inc "v3-ebr/tests/$t.cpp" -o "build/v3_$t.exe"
+  if ($LASTEXITCODE -ne 0) { throw "build failed: v3/$t" }
+  & ".\build\v3_$t.exe"
+  if ($LASTEXITCODE -ne 0) { throw "test failed: v3/$t" }
+}
 ```
 
-Linux 上把 `-pthread` 加上，或使用 `v2-olc/CMakeLists.txt`：
+Linux 上把 `-pthread` 加上，或使用 `v2-olc/CMakeLists.txt` / `v3-ebr/CMakeLists.txt`：
 
 ```bash
-cd v2-olc
+cd v3-ebr
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j
 ctest --test-dir build --output-on-failure
@@ -225,10 +241,70 @@ ctest --test-dir build --output-on-failure
 
 ---
 
-## 8. 推送记录
+## 8. v3：Region/Group OLC + EBR
+
+**结构**
+
+```text
+OlcIndex
+ ├─ 257 fixed Regions
+ │    └─ Region
+ │         ├─ std::atomic<Group*>[]      Group 槽
+ │         └─ EpochReclaimer&            旧 Group 延迟回收
+ └─ 全局 active writers / generation（仅 scan）
+```
+
+**EBR 协议**
+
+- 读者在 `find`/`scan` 期间持有 `EpochReclaimer::Guard`，增加 reader 计数。
+- `Guard` 进入与 `try_gc()` 共用一把 mutex，避免“检查 readers==0 后、删除前”新读者进入的窗口。
+- 写者 `insert`/`erase`：发布新 `Group*` → 旧 Group `mark_obsolete()` → `epoch.retire(old)`。
+- `try_gc()`：仅当 `readers == 0` 时推进 epoch，并 `delete` 已退休 Group。
+- `flush()`：析构时回收剩余退休 Group。
+- `OlcIndex` 提供 `reclaim()` / `pending_retired()` 供测试。
+- 这是**全局 epoch + reader 计数**版本，不是 ART-OLC 的 per-thread epoch list；安全性等价，回收更粗。
+
+**v2 与 v3 的区别**
+
+| 项 | v2 | v3 |
+|---|---|---|
+| Group 持有 | `shared_ptr<const Group>` | `std::atomic<Group*>` |
+| 旧 Group 回收 | 引用计数 | EBR `retire` + `try_gc` |
+| 读者保护 | 引用计数 | `EpochReclaimer::Guard` |
+| 回收测试 | 无 | `olc_ebr_test.cpp` |
+| 代码位置 | `v2-olc/` | `v3-ebr/` |
+
+**代码文件**
+
+| 文件 | 作用 |
+|---|---|
+| `v3-ebr/include/olc/epoch.hpp` | 全局 epoch + reader guard + retire list |
+| `v3-ebr/include/olc/region.hpp` | Group 槽改为 `atomic<Group*>`，退休旧 Group |
+| `v3-ebr/include/olc/index.hpp` | 持有 `EpochReclaimer`，析构 flush |
+| `v3-ebr/tests/olc_ebr_test.cpp` | retire/try_gc/Guard + index 集成 |
+
+**测试**
+
+- `olc_index_test`：约 14–16 ms；重复 20 次 0 失败。
+- `olc_random_test`：4 seed × 2500，0 mismatch。
+- `olc_value_test`：8 writer + 8 reader，10 次 0 失败，8000 键。
+- `olc_contention_test`：单 Group 4 writer + 4 reader，20 次 0 失败。
+- `olc_ebr_test`：有无 reader guard 的回收行为 + index 集成通过。
+- `-DNDEBUG`：通过。
+
+**限制**
+
+- Group 不分裂；首字节热点；`bulk_load` 单线程；新的 Region 存储（非原 block 布局）。
+- EBR 是全局 reader 计数版本，有活跃读者时不回收；不是 per-thread epoch list。
+- 测试仍是差分/压力测试，不是线性化证明。
+
+---
+
+## 9. 推送记录
 
 - v1：`4bc0a64`，tag `v1.0.0`
 - v2：`04a49de`，tag `v2.0.0-olc`
+- v3：`v3-ebr/`，tag `v3.0.0-ebr`（代码提交见 `v3.0.0-ebr` tag）
 - 远端：`https://github.com/panzirui0104-lab/learned-index`
-- v2 没有覆盖 v1；`include/`、`tests/`、根 `CMakeLists.txt` 的 v1 内容未改。
-- 工作日志本次更新会作为 `main` 上的一个 docs-only 提交；v1/v2 代码不变。
+- v2/v3 没有覆盖 v1；`include/`、`tests/`、根 `CMakeLists.txt` 的 v1 内容未改。
+- 本次提交包含 `v3-ebr/` 新增代码与 README/WORKLOG 更新；v1/v2 代码不变。

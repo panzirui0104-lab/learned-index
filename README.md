@@ -1,15 +1,16 @@
-# Context16 String Index: v1 snapshot + v2 Region-OLC
+# Context16 String Index: v1 snapshot + v2/v3 Region-OLC
 
-这个仓库包含**两个并存版本**的 Context16 字符串索引并发实现，基线都是 `czr112/string-learned-index` 的
+这个仓库包含**三个并存版本**的 Context16 字符串索引并发实现，基线都是 `czr112/string-learned-index` 的
 `02_Code_and_Experiments/validation_e25_20260918/index.hpp`
 （SHA-256 `c8a1ae3c7373714842f724887a6f45eea7ce5ab7b6e9cdbd677ab87fed0e7265`，未修改）。
 
 | 版本 | 位置 | 并发模型 | 写代价 | tag |
 |---|---|---|---|---|
 | **v1** | 根目录 `include/concurrent/` | shard 级不可变快照（RCU/COW） | `O(shard_size)` | `v1.0.0` |
-| **v2** | `v2-olc/` | Region/Group 级 OLC（版本字 + lock/obsolete + 原地 value 更新） | `O(group_size)`，value 更新 `O(1)` | `v2.0.0-olc` |
+| **v2** | `v2-olc/` | Region/Group 级 OLC + `shared_ptr` 回收 | `O(group_size)`，value 更新 `O(1)` | `v2.0.0-olc` |
+| **v3** | `v3-ebr/` | 同 v2，但 Group 用 **EBR** 回收 | `O(group_size)`，value 更新 `O(1)` | `v3.0.0-ebr` |
 
-v2 只新增了 `v2-olc/` 目录，**没有覆盖 v1**。详细设计、测试和取舍见 [WORKLOG.md](WORKLOG.md) 与 [v2-olc/README.md](v2-olc/README.md)。
+v2/v3 只新增目录，**没有覆盖 v1**。详细设计、测试和取舍见 [WORKLOG.md](WORKLOG.md)、[v2-olc/README.md](v2-olc/README.md) 和 [v3-ebr/README.md](v3-ebr/README.md)。
 
 ---
 
@@ -36,6 +37,29 @@ g++ -std=c++17 -O2 -I v2-olc/include `
 
 ```text
 PASSED in ~15 ms
+```
+
+### v3（Region-OLC + EBR）
+
+```bash
+g++ -std=c++17 -O2 -pthread \
+  -I v3-ebr/include \
+  v3-ebr/tests/olc_index_test.cpp -o build/v3_test
+./build/v3_test
+```
+
+Windows + MinGW 8.1：
+
+```powershell
+g++ -std=c++17 -O2 -I v3-ebr/include `
+  v3-ebr/tests/olc_index_test.cpp -o build/v3_test.exe
+.\build\v3_test.exe
+```
+
+预期输出：
+
+```text
+PASSED in ~16 ms
 ```
 
 ### v1（shard 快照，读多写少）
@@ -65,6 +89,11 @@ ctest --test-dir build/v1 --output-on-failure
 cmake -S v2-olc -B build/v2 -DCMAKE_BUILD_TYPE=Release
 cmake --build build/v2 -j
 ctest --test-dir build/v2 --output-on-failure
+
+# v3
+cmake -S v3-ebr -B build/v3 -DCMAKE_BUILD_TYPE=Release
+cmake --build build/v3 -j
+ctest --test-dir build/v3 --output-on-failure
 ```
 
 ---
@@ -137,6 +166,44 @@ index.erase("b");                   // 缺失返回 false
 4. **`bulk_load` 单线程**：257 个 Region 顺序构建。
 5. **新的 Region 存储**：v2 用 Group 有序数组重写了 Region，保留了 Context16 Model/prefix 路由，但**没有沿用**原 block/overflow/demand capacity 布局。
 6. **不持久化、不提供 `range_sum`**：与原索引一致。
+
+---
+
+## v3：Region/Group 级 OLC + EBR
+
+v3 与 v2 的 OLC 结构相同，区别只在 Group 的回收：
+
+```text
+Region
+ ├─ std::atomic<Group*>[]   Group 槽
+ └─ EpochReclaimer&         旧 Group 延迟回收
+```
+
+- `insert`/`erase` 发布新 `Group*`，旧指针 `mark_obsolete()` 后交给 `EpochReclaimer::retire`。
+- 读者在 `find`/`scan` 期间持有 `EpochReclaimer::Guard`；有活跃读者时 `try_gc()` 不回收。
+- `Guard` 进入与 `try_gc()` 共用一把 mutex，避免“检查 readers==0 后、删除前”新读者进入的窗口。
+- 没有活跃读者时，`try_gc()` 推进 epoch 并 `delete` 已退休 Group。
+- 这是**全局 epoch + reader 计数**版本，不是 per-thread epoch list；安全性等价，回收粒度更粗。
+- `OlcIndex` 提供 `reclaim()` 和 `pending_retired()` 供测试/诊断。
+
+### v2 与 v3 的区别
+
+| 项 | v2 | v3 |
+|---|---|---|
+| Group 持有 | `shared_ptr<const Group>` | `std::atomic<Group*>` |
+| 旧 Group 回收 | 引用计数 | `EpochReclaimer::retire` + `try_gc` |
+| 读者保护 | 引用计数 | `EpochReclaimer::Guard` |
+| 回收测试 | 无 | `olc_ebr_test.cpp` |
+| 代码位置 | `v2-olc/` | `v3-ebr/` |
+
+v3 API 与 v2 相同，额外提供：
+
+```cpp
+index.reclaim();                    // 显式触发一次 try_gc
+std::size_t pending = index.pending_retired();
+```
+
+v3 的 Group 不分裂、首字节热点、`bulk_load` 单线程、新的 Region 存储等限制与 v2 相同。
 
 ---
 
@@ -220,6 +287,23 @@ context16-concurrent-index/
       olc_random_test.cpp         4 seed × 2500 随机差分
       olc_value_test.cpp          8 writer + 8 reader 值一致性
       olc_contention_test.cpp     单 Group 4 writer + 4 reader
+  v3-ebr/
+    CMakeLists.txt                v3 构建
+    README.md                     v3 设计说明
+    include/olc/
+      version.hpp                 64 位版本字
+      model.hpp                   Context16 模型
+      group.hpp                   排序 Group；value atomic
+      epoch.hpp                   EBR：全局 epoch + reader guard
+      region.hpp                  Region OLC + EBR 退休
+      index.hpp                   257 Region、reclaim/pending
+      compat.hpp                  测试用线程/锁兼容层
+    tests/
+      olc_index_test.cpp          基础/顺序/并发/同 shard
+      olc_random_test.cpp         4 seed × 2500 随机差分
+      olc_value_test.cpp          8 writer + 8 reader 值一致性
+      olc_contention_test.cpp     单 Group 4 writer + 4 reader
+      olc_ebr_test.cpp            EBR retire/try_gc + index 集成
 ```
 
 ---
@@ -236,20 +320,26 @@ context16-concurrent-index/
 | v2 `olc_value_test.cpp` | 8 writer + 8 reader，10 次 0 失败，最终 8000 键 |
 | v2 `olc_contention_test.cpp` | 单 Group 4 writer + 4 reader，20 次 0 失败 |
 | v2 `-DNDEBUG` Release | 通过 |
+| v3 `v3-ebr/tests/olc_index_test.cpp` | PASSED，约 14–16 ms；重复 20 次 0 失败 |
+| v3 `olc_random_test.cpp` | 4 seed × 2500 操作，0 mismatch |
+| v3 `olc_value_test.cpp` | 8 writer + 8 reader，10 次 0 失败，8000 键 |
+| v3 `olc_contention_test.cpp` | 单 Group 4 writer + 4 reader，20 次 0 失败 |
+| v3 `olc_ebr_test.cpp` | retire/try_gc + reader guard + index 集成通过 |
+| v3 `-DNDEBUG` Release | 通过 |
 
 说明：本机没有 cmake/WSL，Linux 的 `std::mutex/std::thread` 路径和 `ctest` 没有实际执行；CMake 文件已提供。
 这些是差分/压力测试，不是线性化证明；正式使用建议在 Linux 上跑 ThreadSanitizer。
 
 ---
 
-## v1 与 v2 的选择
+## v1 / v2 / v3 的选择
 
 | 场景 | 推荐 |
 |---|---|
-| 读远多于写，写低频/批量 | v1 或 v2 都可；v1 实现更简单 |
-| 写较多，想减少写放大 | **v2**（只 COW 一个 Group） |
-| 同一首字节热点严重 | v1/v2 都会受影响；需要更细分片 |
-| 要求严格 ART-OLC（含 EBR） | 当前 v2 仍是 `shared_ptr` 回收；需要继续升级 |
+| 读远多于写，写低频/批量 | v1 或 v2/v3 都可；v1 实现更简单 |
+| 写较多，想减少写放大 | **v2 或 v3**（只 COW 一个 Group） |
+| 要求 Group 用 epoch 回收 | **v3**（EBR） |
+| 同一首字节热点严重 | 三个版本都会受影响；需要更细分片 |
 | 构建后只读 | 直接冻结单实例即可，不需要并发层 |
 
 ---
@@ -262,7 +352,7 @@ context16-concurrent-index/
 07_Eval_Integration/adapters/our_index_concurrent/
 ```
 
-v2 目前只有索引本体和测试；如果要接 benchmark，需要按 `string-index/v1` 写一个薄适配器，把
+v2/v3 目前只有索引本体和测试；如果要接 benchmark，需要按 `string-index/v1` 写一个薄适配器，把
 `olc::OlcIndex` 的 `find/insert/update/erase/scan/memory` 转发出去。
 
 ---
@@ -271,7 +361,7 @@ v2 目前只有索引本体和测试；如果要接 benchmark，需要按 `strin
 
 - 上游：`czr112/string-learned-index`，`02_Code_and_Experiments/validation_e25_20260918/index.hpp`，SHA-256 `c8a1ae3c...`。
 - 上游仓库**没有 LICENSE 文件**；本仓库只是本地研究副本，不声称拥有上游代码的再分发权。对外发布前请先向上游作者确认许可。
-- `include/concurrent/`、`v2-olc/` 和测试是新代码；本仓库未声明许可证，使用者需自行决定。
+- `include/concurrent/`、`v2-olc/`、`v3-ebr/` 和测试是新代码；本仓库未声明许可证，使用者需自行决定。
 
 ---
 
@@ -279,7 +369,10 @@ v2 目前只有索引本体和测试；如果要接 benchmark，需要按 `strin
 
 - [工作日志](WORKLOG.md)
 - [v2 设计说明](v2-olc/README.md)
+- [v3 设计说明](v3-ebr/README.md)
 - [v2 代码目录](v2-olc)
+- [v3 代码目录](v3-ebr)
 - [v1 代码目录](include/concurrent)
+- [v3 tag](https://github.com/panzirui0104-lab/learned-index/tree/v3.0.0-ebr)
 - [v2 tag](https://github.com/panzirui0104-lab/learned-index/tree/v2.0.0-olc)
 - [v1 tag](https://github.com/panzirui0104-lab/learned-index/tree/v1.0.0)
